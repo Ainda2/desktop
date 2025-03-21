@@ -1,15 +1,25 @@
 import { StatsDatabase, ILaunchStats, IDailyMeasures } from './stats-database'
-import { getDotComAPIEndpoint } from '../api'
 import { getVersion } from '../../ui/lib/app-proxy'
 import { hasShownWelcomeFlow } from '../welcome'
-import { Account } from '../../models/account'
+import {
+  Account,
+  isDotComAccount,
+  isEnterpriseAccount,
+} from '../../models/account'
 import { getOS } from '../get-os'
 import { Repository } from '../../models/repository'
 import { merge } from '../../lib/merge'
 import { getPersistedThemeName } from '../../ui/lib/application-theme'
 import { IUiActivityMonitor } from '../../ui/lib/ui-activity-monitor'
 import { Disposable } from 'event-kit'
-import { SignInMethod } from '../stores'
+import {
+  showDiffCheckMarksDefault,
+  showDiffCheckMarksKey,
+  underlineLinksDefault,
+  underlineLinksKey,
+  useCustomEditorKey,
+  useCustomShellKey,
+} from '../stores'
 import { assertNever } from '../fatal-error'
 import {
   getNumber,
@@ -28,6 +38,8 @@ import { getNotificationsEnabled } from '../stores/notifications-store'
 import { isInApplicationFolder } from '../../ui/main-process-proxy'
 import { getRendererGUID } from '../get-renderer-guid'
 import { ValidNotificationPullRequestReviewState } from '../valid-notification-pull-request-review'
+import { useExternalCredentialHelperKey } from '../trampoline/use-external-credential-helper'
+import { getUserAgent } from '../http'
 
 type PullRequestReviewStatFieldInfix =
   | 'Approved'
@@ -64,7 +76,6 @@ const FirstCommitCreatedAtKey = 'first-commit-created-at'
 const FirstPushToGitHubAtKey = 'first-push-to-github-at'
 const FirstNonDefaultBranchCheckoutAtKey =
   'first-non-default-branch-checkout-at'
-const WelcomeWizardSignInMethodKey = 'welcome-wizard-sign-in-method'
 const terminalEmulatorKey = 'shell'
 const textEditorKey: string = 'externalEditor'
 
@@ -227,6 +238,10 @@ const DefaultDailyMeasures: IDailyMeasures = {
   submoduleDiffViewedFromHistoryCount: 0,
   openSubmoduleFromDiffCount: 0,
   previewedPullRequestCount: 0,
+  typedInChangesFilterCount: 0,
+  appliesIncludedInCommitFilterCount: 0,
+  adjustedFiltersForHiddenChangesCount: 0,
+  enterpriseAccountCount: 0,
 }
 
 // A subtype of IDailyMeasures filtered to contain only its numeric properties
@@ -310,14 +325,6 @@ interface IOnboardingStats {
    * metric being added and we will thus never be able to provide a value.
    */
   readonly timeToWelcomeWizardTerminated?: number
-
-  /**
-   * The method that was used when authenticating a user in the welcome flow. If
-   * multiple successful authentications happened during the welcome flow due to
-   * the user stepping back and signing in to another account this will reflect
-   * the last one.
-   */
-  readonly welcomeWizardSignInMethod?: 'basic' | 'web'
 }
 
 interface ICalculatedStats {
@@ -386,6 +393,18 @@ interface ICalculatedStats {
 
   /** Whether or not the user has enabled high-signal notifications */
   readonly notificationsEnabled: boolean
+
+  /** Whether or not the user has their accessibility setting set for viewing link underlines */
+  readonly linkUnderlinesVisible: boolean
+
+  /** Whether or not the user has their accessibility setting set for viewing diff check marks */
+  readonly diffCheckMarksVisible: boolean
+
+  /**
+   * Whether or not the user has enabled the external credential helper or null
+   * if the user has not yet made an active decision
+   **/
+  readonly useExternalCredentialHelper?: boolean | null
 }
 
 type DailyStats = ICalculatedStats &
@@ -413,7 +432,10 @@ export interface IStatsStore {
 const defaultPostImplementation = (body: Record<string, any>) =>
   fetch(StatsEndpoint, {
     method: 'POST',
-    headers: new Headers({ 'Content-Type': 'application/json' }),
+    headers: {
+      'Content-Type': 'application/json',
+      'user-agent': getUserAgent(),
+    },
     body: JSON.stringify(body),
   })
 
@@ -551,13 +573,29 @@ export class StatsStore implements IStatsStore {
     const userType = this.determineUserType(accounts)
     const repositoryCounts = this.categorizedRepositoryCounts(repositories)
     const onboardingStats = this.getOnboardingStats()
-    const selectedTerminalEmulator =
-      localStorage.getItem(terminalEmulatorKey) || 'none'
-    const selectedTextEditor = localStorage.getItem(textEditorKey) || 'none'
+    const useCustomShell = getBoolean(useCustomShellKey, false)
+    const selectedTerminalEmulator = useCustomShell
+      ? 'custom'
+      : localStorage.getItem(terminalEmulatorKey) || 'none'
+    const useCustomEditor = getBoolean(useCustomEditorKey, false)
+    const selectedTextEditor = useCustomEditor
+      ? 'custom'
+      : localStorage.getItem(textEditorKey) || 'none'
     const repositoriesCommittedInWithoutWriteAccess = getNumberArray(
       RepositoriesCommittedInWithoutWriteAccessKey
     ).length
     const diffMode = getShowSideBySideDiff() ? 'split' : 'unified'
+    const linkUnderlinesVisible = getBoolean(
+      underlineLinksKey,
+      underlineLinksDefault
+    )
+    const diffCheckMarksVisible = getBoolean(
+      showDiffCheckMarksKey,
+      showDiffCheckMarksDefault
+    )
+
+    const useExternalCredentialHelper =
+      getBoolean(useExternalCredentialHelperKey) ?? null
 
     // isInApplicationsFolder is undefined when not running on Darwin
     const launchedFromApplicationsFolder = __DARWIN__
@@ -583,6 +621,9 @@ export class StatsStore implements IStatsStore {
       repositoriesCommittedInWithoutWriteAccess,
       diffMode,
       launchedFromApplicationsFolder,
+      linkUnderlinesVisible,
+      diffCheckMarksVisible,
+      useExternalCredentialHelper,
     }
   }
 
@@ -608,8 +649,6 @@ export class StatsStore implements IStatsStore {
       FirstNonDefaultBranchCheckoutAtKey
     )
 
-    const welcomeWizardSignInMethod = getWelcomeWizardSignInMethod()
-
     return {
       timeToWelcomeWizardTerminated,
       timeToFirstAddedRepository,
@@ -618,7 +657,6 @@ export class StatsStore implements IStatsStore {
       timeToFirstCommit,
       timeToFirstGitHubPush,
       timeToFirstNonDefaultBranchCheckout,
-      welcomeWizardSignInMethod,
     }
   }
 
@@ -632,16 +670,10 @@ export class StatsStore implements IStatsStore {
 
   /** Determines if an account is a dotCom and/or enterprise user */
   private determineUserType(accounts: ReadonlyArray<Account>) {
-    const dotComAccount = !!accounts.find(
-      a => a.endpoint === getDotComAPIEndpoint()
-    )
-    const enterpriseAccount = !!accounts.find(
-      a => a.endpoint !== getDotComAPIEndpoint()
-    )
-
     return {
-      dotComAccount,
-      enterpriseAccount,
+      dotComAccount: accounts.some(isDotComAccount),
+      enterpriseAccount: accounts.some(isEnterpriseAccount),
+      enterpriseAccountCount: accounts.filter(isEnterpriseAccount).length,
     }
   }
 
@@ -777,13 +809,10 @@ export class StatsStore implements IStatsStore {
     return this.optOut
   }
 
-  public async recordPush(
-    githubAccount: Account | null,
-    options?: PushOptions
-  ) {
-    if (githubAccount === null) {
+  public async recordPush(account: Account | null, options?: PushOptions) {
+    if (account === null) {
       await this.recordPushToGenericRemote(options)
-    } else if (githubAccount.endpoint === getDotComAPIEndpoint()) {
+    } else if (isDotComAccount(account)) {
       await this.recordPushToGitHub(options)
     } else {
       await this.recordPushToGitHubEnterprise(options)
@@ -846,10 +875,6 @@ export class StatsStore implements IStatsStore {
 
   public recordNonDefaultBranchCheckout() {
     createLocalStorageTimestamp(FirstNonDefaultBranchCheckoutAtKey)
-  }
-
-  public recordWelcomeWizardSignInMethod(method: SignInMethod) {
-    localStorage.setItem(WelcomeWizardSignInMethodKey, method)
   }
 
   /** Record the number of stash entries created outside of Desktop for the day
@@ -1187,23 +1212,6 @@ function timeTo(key: string): number | undefined {
   return endTime === null || endTime <= startTime
     ? -1
     : Math.round((endTime - startTime) / 1000)
-}
-
-/**
- * Get a string representing the sign in method that was used when
- * authenticating a user in the welcome flow. This method ensures that the
- * reported value is known to the analytics system regardless of whether the
- * enum value of the SignInMethod type changes.
- */
-function getWelcomeWizardSignInMethod(): 'basic' | 'web' | undefined {
-  const method = localStorage.getItem(WelcomeWizardSignInMethodKey) ?? undefined
-
-  if (method === 'basic' || method === 'web' || method === undefined) {
-    return method
-  }
-
-  log.error(`Could not parse welcome wizard sign in method: ${method}`)
-  return undefined
 }
 
 /**

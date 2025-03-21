@@ -1,10 +1,9 @@
 import * as React from 'react'
-import { Account } from '../../models/account'
+import { Account, isDotComAccount } from '../../models/account'
 import { LinkButton } from './link-button'
-import { getDotComAPIEndpoint } from '../../lib/api'
 import { isAttributableEmailFor } from '../../lib/email'
 import { Octicon } from '../octicons'
-import * as OcticonSymbol from '../octicons/octicons.generated'
+import * as octicons from '../octicons/octicons.generated'
 import { AriaLiveContainer } from '../accessibility/aria-live-container'
 
 interface IGitEmailNotFoundWarningProps {
@@ -25,7 +24,7 @@ export class GitEmailNotFoundWarning extends React.Component<IGitEmailNotFoundWa
       <span className="warning-icon">⚠️</span>
     ) : (
       <span className="green-circle">
-        <Octicon className="check-icon" symbol={OcticonSymbol.check} />
+        <Octicon className="check-icon" symbol={octicons.check} />
       </span>
     )
 
@@ -88,10 +87,9 @@ export class GitEmailNotFoundWarning extends React.Component<IGitEmailNotFoundWa
 
   private getAccountTypeDescription() {
     if (this.props.accounts.length === 1) {
-      const accountType =
-        this.props.accounts[0].endpoint === getDotComAPIEndpoint()
-          ? 'GitHub'
-          : 'GitHub Enterprise'
+      const accountType = isDotComAccount(this.props.accounts[0])
+        ? 'GitHub'
+        : 'GitHub Enterprise'
 
       return `your ${accountType} account`
     }

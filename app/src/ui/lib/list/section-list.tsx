@@ -301,11 +301,8 @@ interface ISectionListProps {
    */
   readonly setScrollTop?: number
 
-  /** The aria-labelledby attribute for the list component. */
-  readonly ariaLabelledBy?: string
-
-  /** The aria-label attribute for the list component. */
-  readonly ariaLabel?: string
+  /** The aria-label attribute for the section list component. */
+  readonly getSectionAriaLabel?: (section: number) => string | undefined
 
   /**
    * Optional callback for providing an aria label for screen readers for each
@@ -846,9 +843,14 @@ export class SectionList extends React.Component<
     }
 
     const lastSelection =
-      this.props.selectedRows[this.props.selectedRows.length - 1]
+      direction === 'down'
+        ? this.props.selectedRows[this.props.selectedRows.length - 1]
+        : this.props.selectedRows[0]
 
-    const selectionOrigin = this.props.selectedRows[0]
+    const selectionOrigin =
+      direction === 'down'
+        ? this.props.selectedRows[0]
+        : this.props.selectedRows.at(-1)
 
     const newRow = findNextSelectableRow(
       this.props.rowCount,
@@ -856,7 +858,7 @@ export class SectionList extends React.Component<
       this.canSelectRow
     )
 
-    if (newRow != null) {
+    if (newRow != null && selectionOrigin !== undefined) {
       if (this.props.onSelectionChanged) {
         const newSelection = createSelectionBetween(
           selectionOrigin,
@@ -1242,14 +1244,7 @@ export class SectionList extends React.Component<
     }
 
     return (
-      // eslint-disable-next-line github/a11y-role-supports-aria-props
-      <div
-        ref={this.onRef}
-        id={this.props.id}
-        className="list"
-        aria-labelledby={this.props.ariaLabelledBy}
-        aria-label={this.props.ariaLabel}
-      >
+      <div ref={this.onRef} id={this.props.id} className="list">
         {content}
       </div>
     )
@@ -1354,6 +1349,7 @@ export class SectionList extends React.Component<
           overscanRowCount={4}
           style={{ ...params.style, width: '100%' }}
           tabIndex={-1}
+          aria-label={this.props.getSectionAriaLabel?.(section)}
         />
       )
     }
@@ -1385,7 +1381,7 @@ export class SectionList extends React.Component<
   private get totalHeight() {
     return this.props.rowCount.reduce((total, _count, section) => {
       return total + this.getSectionHeight(section)
-    })
+    }, 0)
   }
 
   private sectionHeight = ({ index }: Index) => {

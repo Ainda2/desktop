@@ -6,7 +6,6 @@ import * as Path from 'path'
 import { App } from './app'
 import {
   Dispatcher,
-  gitAuthenticationErrorHandler,
   externalEditorErrorHandler,
   openShellErrorHandler,
   mergeConflictHandler,
@@ -71,6 +70,10 @@ import { migrateRendererGUID } from '../lib/get-renderer-guid'
 import { initializeRendererNotificationHandler } from '../lib/notifications/notification-handler'
 import { Grid } from 'react-virtualized'
 import { NotificationsDebugStore } from '../lib/stores/notifications-debug-store'
+import { trampolineServer } from '../lib/trampoline/trampoline-server'
+import { TrampolineCommandIdentifier } from '../lib/trampoline/trampoline-command'
+import { createAskpassTrampolineHandler } from '../lib/trampoline/trampoline-askpass-handler'
+import { createCredentialHelperTrampolineHandler } from '../lib/trampoline/trampoline-credential-helper'
 
 if (__DEV__) {
   installDevGlobals()
@@ -112,11 +115,11 @@ if (__DARWIN__) {
 let currentState: IAppState | null = null
 
 const sendErrorWithContext = (
-  error: Error,
+  e: unknown,
   context: Record<string, string> = {},
   nonFatal?: boolean
 ) => {
-  error = withSourceMappedStack(error)
+  const error = withSourceMappedStack(e)
 
   console.error('Uncaught exception', error)
 
@@ -181,10 +184,38 @@ const sendErrorWithContext = (
   }
 }
 
-process.once('uncaughtException', (error: Error) => {
+const resizeLoopCompletedMessage =
+  'ResizeObserver loop completed with undelivered notifications.'
+
+const onUncaughtException = (error: unknown) => {
+  // This is a known issue with the ResizeObserver API in Chromium 132 which is
+  // fixed in 133 that we can safely ignore.
+  // See: https://issues.chromium.org/issues/391393420
+  if (
+    error === resizeLoopCompletedMessage ||
+    (error &&
+      typeof error === 'object' &&
+      'message' in error &&
+      error.message === resizeLoopCompletedMessage)
+  ) {
+    sendNonFatalException(
+      'resizeObserverLoopCompleted',
+      withSourceMappedStack(error)
+    )
+    return
+  }
+
   sendErrorWithContext(error)
-  reportUncaughtException(error)
-})
+  reportUncaughtException(withSourceMappedStack(error))
+
+  // We used to subscribe to uncaughtException using process.once but we want
+  // to be able to ignore the resize observer error above so we need to
+  // unsubscribe manually once we encounter an error we actually want to crash
+  // the app for.
+  process.off('uncaughtException', onUncaughtException)
+}
+
+process.on('uncaughtException', onUncaughtException)
 
 // See sendNonFatalException for more information
 process.on(
@@ -221,9 +252,21 @@ const statsStore = new StatsStore(
   new StatsDatabase('StatsDatabase'),
   new UiActivityMonitor()
 )
-const signInStore = new SignInStore()
 
 const accountsStore = new AccountsStore(localStorage, TokenStore)
+
+const signInStore = new SignInStore(accountsStore)
+
+trampolineServer.registerCommandHandler(
+  TrampolineCommandIdentifier.AskPass,
+  createAskpassTrampolineHandler(accountsStore)
+)
+
+trampolineServer.registerCommandHandler(
+  TrampolineCommandIdentifier.CredentialHelper,
+  createCredentialHelperTrampolineHandler(accountsStore)
+)
+
 const repositoriesStore = new RepositoriesStore(
   new RepositoriesDatabase('Database')
 )
@@ -292,7 +335,6 @@ dispatcher.registerErrorHandler(openShellErrorHandler)
 dispatcher.registerErrorHandler(mergeConflictHandler)
 dispatcher.registerErrorHandler(lfsAttributeMismatchHandler)
 dispatcher.registerErrorHandler(insufficientGitHubRepoPermissions)
-dispatcher.registerErrorHandler(gitAuthenticationErrorHandler)
 dispatcher.registerErrorHandler(pushNeedsPullHandler)
 dispatcher.registerErrorHandler(samlReauthRequired)
 dispatcher.registerErrorHandler(backgroundTaskHandler)
@@ -335,7 +377,15 @@ ipcRenderer.on('blur', () => {
 })
 
 ipcRenderer.on('url-action', (_, action) =>
-  dispatcher.dispatchURLAction(action)
+  dispatcher
+    .dispatchURLAction(action)
+    .catch(e => log.error(`URL action ${action.name} failed`, e))
+)
+
+ipcRenderer.on('cli-action', (_, action) =>
+  dispatcher
+    .dispatchCLIAction(action)
+    .catch(e => log.error(`CLI action ${action.kind} failed`, e))
 )
 
 // react-virtualized will use the literal string "grid" as the 'aria-label'

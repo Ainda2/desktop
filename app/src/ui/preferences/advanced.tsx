@@ -8,15 +8,18 @@ import { isWindowsOpenSSHAvailable } from '../../lib/ssh/ssh'
 interface IAdvancedPreferencesProps {
   readonly useWindowsOpenSSH: boolean
   readonly optOutOfUsageTracking: boolean
+  readonly useExternalCredentialHelper: boolean
   readonly repositoryIndicatorsEnabled: boolean
   readonly onUseWindowsOpenSSHChanged: (checked: boolean) => void
   readonly onOptOutofReportingChanged: (checked: boolean) => void
+  readonly onUseExternalCredentialHelperChanged: (checked: boolean) => void
   readonly onRepositoryIndicatorsEnabledChanged: (enabled: boolean) => void
 }
 
 interface IAdvancedPreferencesState {
   readonly optOutOfUsageTracking: boolean
   readonly canUseWindowsSSH: boolean
+  readonly useExternalCredentialHelper: boolean
 }
 
 export class Advanced extends React.Component<
@@ -29,6 +32,7 @@ export class Advanced extends React.Component<
     this.state = {
       optOutOfUsageTracking: this.props.optOutOfUsageTracking,
       canUseWindowsSSH: false,
+      useExternalCredentialHelper: this.props.useExternalCredentialHelper,
     }
   }
 
@@ -47,6 +51,15 @@ export class Advanced extends React.Component<
 
     this.setState({ optOutOfUsageTracking: value })
     this.props.onOptOutofReportingChanged(value)
+  }
+
+  private onUseExternalCredentialHelperChanged = (
+    event: React.FormEvent<HTMLInputElement>
+  ) => {
+    const value = event.currentTarget.checked
+
+    this.setState({ useExternalCredentialHelper: value })
+    this.props.onUseExternalCredentialHelperChanged(value)
   }
 
   private onRepositoryIndicatorsEnabledChanged = (
@@ -101,7 +114,6 @@ export class Advanced extends React.Component<
             </p>
           </div>
         </div>
-        {this.renderSSHSettings()}
         <div className="advanced-section">
           <h2>Usage</h2>
           <Checkbox
@@ -114,6 +126,33 @@ export class Advanced extends React.Component<
             onChange={this.onReportingOptOutChanged}
           />
         </div>
+        <h2>Network and credentials</h2>
+        {this.renderSSHSettings()}
+        <div className="advanced-section">
+          <Checkbox
+            label={'Use Git Credential Manager'}
+            value={
+              this.state.useExternalCredentialHelper
+                ? CheckboxValue.On
+                : CheckboxValue.Off
+            }
+            onChange={this.onUseExternalCredentialHelperChanged}
+            ariaDescribedBy="use-external-credential-helper-description"
+          />
+          <div
+            id="use-external-credential-helper-description"
+            className="git-settings-description"
+          >
+            <p>
+              Use{' '}
+              <LinkButton uri="https://gh.io/gcm">
+                Git Credential Manager{' '}
+              </LinkButton>{' '}
+              for private repositories outside of GitHub.com. This feature is
+              experimental and subject to change.
+            </p>
+          </div>
+        </div>
       </DialogContent>
     )
   }
@@ -125,7 +164,6 @@ export class Advanced extends React.Component<
 
     return (
       <div className="advanced-section">
-        <h2>SSH</h2>
         <Checkbox
           label="Use system OpenSSH (recommended)"
           value={

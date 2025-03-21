@@ -6,7 +6,7 @@ import {
   setGlobalConfigValue,
 } from '../../lib/git/config'
 import { CommitListItem } from '../history/commit-list-item'
-import { Account } from '../../models/account'
+import { Account, isDotComAccount } from '../../models/account'
 import { CommitIdentity } from '../../models/commit-identity'
 import { Form } from '../lib/form'
 import { Button } from '../lib/button'
@@ -20,7 +20,6 @@ import { ConfigLockFileExists } from './config-lock-file-exists'
 import { RadioButton } from './radio-button'
 import { Select } from './select'
 import { GitEmailNotFoundWarning } from './git-email-not-found-warning'
-import { getDotComAPIEndpoint } from '../../lib/api'
 import { Loading } from './loading'
 
 interface IConfigureGitUserProps {
@@ -203,9 +202,7 @@ export class ConfigureGitUser extends React.Component<
 
         {error}
 
-        {this.state.useGitHubAuthorInfo
-          ? this.renderGitHubInfo()
-          : this.renderGitConfigForm()}
+        {this.renderConfigForm()}
 
         {this.renderExampleCommit()}
       </div>
@@ -268,8 +265,7 @@ export class ConfigureGitUser extends React.Component<
       return
     }
 
-    const accountTypeSuffix =
-      account.endpoint === getDotComAPIEndpoint() ? '' : ' Enterprise'
+    const accountTypeSuffix = isDotComAccount(account) ? '' : ' Enterprise'
 
     return (
       <div>
@@ -296,14 +292,7 @@ export class ConfigureGitUser extends React.Component<
     }
 
     return (
-      <Form className="sign-in-form" onSubmit={this.save}>
-        <TextBox
-          label="Name"
-          placeholder="Your Name"
-          value={this.state.gitHubName}
-          readOnly={true}
-        />
-
+      <>
         <Select
           label="Email"
           value={this.state.gitHubEmail}
@@ -315,42 +304,21 @@ export class ConfigureGitUser extends React.Component<
             </option>
           ))}
         </Select>
-
-        <Row>
-          <Button type="submit">{this.props.saveLabel || 'Save'}</Button>
-          {this.props.children}
-        </Row>
-      </Form>
+      </>
     )
   }
 
   private renderGitConfigForm() {
     return (
-      <Form className="sign-in-form" onSubmit={this.save}>
-        {this.state.loadingGitConfig && (
-          <div className="git-config-loading">
-            <Loading /> Checking for an existing git config…
-          </div>
-        )}
-        {!this.state.loadingGitConfig && (
-          <>
-            <TextBox
-              label="Name"
-              placeholder="Your Name"
-              onValueChanged={this.onNameChange}
-              value={this.state.manualName}
-              autoFocus={true}
-            />
-
-            <TextBox
-              type="email"
-              label="Email"
-              placeholder="your-email@example.com"
-              value={this.state.manualEmail}
-              onValueChanged={this.onEmailChange}
-            />
-          </>
-        )}
+      <>
+        <TextBox
+          type="email"
+          label="Email"
+          placeholder="your-email@example.com"
+          value={this.state.manualEmail}
+          onValueChanged={this.onEmailChange}
+          readOnly={this.state.loadingGitConfig}
+        />
 
         {this.account !== null && (
           <GitEmailNotFoundWarning
@@ -358,7 +326,38 @@ export class ConfigureGitUser extends React.Component<
             email={this.state.manualEmail}
           />
         )}
+      </>
+    )
+  }
 
+  private renderConfigForm() {
+    return (
+      <Form className="sign-in-form" onSubmit={this.save}>
+        {!this.state.useGitHubAuthorInfo && this.state.loadingGitConfig && (
+          <div className="git-config-loading">
+            <Loading /> Checking for an existing git config…
+          </div>
+        )}
+        <div className="sign-in-form-inputs">
+          <TextBox
+            label="Name"
+            placeholder="Your Name"
+            onValueChanged={this.onNameChange}
+            value={
+              this.state.useGitHubAuthorInfo
+                ? this.state.gitHubName
+                : this.state.manualName
+            }
+            readOnly={
+              this.state.useGitHubAuthorInfo || this.state.loadingGitConfig
+            }
+            autoFocus={true}
+          />
+
+          {this.state.useGitHubAuthorInfo
+            ? this.renderGitHubInfo()
+            : this.renderGitConfigForm()}
+        </div>
         <Row>
           <Button type="submit">{this.props.saveLabel || 'Save'}</Button>
           {this.props.children}
